@@ -205,6 +205,7 @@ final class WebSocketService: ObservableObject {
         webSocketTask?.sendPing { [weak self] error in
             Task { @MainActor in
                 guard let self = self else { return }
+                guard currentGeneration == self.connectionGeneration else { return }
                 if let error = error {
                     self.handleDisconnection(error: error)
                 } else {
@@ -454,8 +455,9 @@ final class WebSocketService: ObservableObject {
 
     // MARK: - Reconnection (Exponential Backoff with Jitter)
     private func handleDisconnection(error: Error) {
-        // Only guard against duplicate reconnection attempts
+        // Guard against duplicate reconnection attempts
         if case .connecting = connectionState { return }
+        if case .reconnecting = connectionState { return }
 
         stopHeartbeat()
         connectionQuality = .none
