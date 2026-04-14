@@ -130,6 +130,23 @@ final class OfflineTileManager: ObservableObject {
         
         downloadedRegions.removeAll { $0.id == downloadedRegion.id }
         downloadedRegions.append(downloadedRegion)
+
+        // Persist the region entity to CoreData so it survives app restart
+        let context = persistenceController.container.viewContext
+        let regionEntity = OfflineRegionEntity(context: context)
+        regionEntity.id = downloadedRegion.id
+        regionEntity.name = downloadedRegion.name
+        regionEntity.country = downloadedRegion.country
+        regionEntity.centerLatitude = downloadedRegion.centerLatitude
+        regionEntity.centerLongitude = downloadedRegion.centerLongitude
+        regionEntity.spanLatitude = downloadedRegion.spanLatitude
+        regionEntity.spanLongitude = downloadedRegion.spanLongitude
+        regionEntity.zoomLevel = Int32(downloadedRegion.zoomLevel)
+        regionEntity.isDownloaded = true
+        regionEntity.downloadedAt = downloadedRegion.downloadedAt
+        regionEntity.sizeInMB = downloadedRegion.sizeInMB
+        try? context.save()
+
         downloadProgress[region.id]?.isComplete = true
         activeTasks.removeValue(forKey: region.id)
         

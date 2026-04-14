@@ -46,8 +46,8 @@ final class VoiceGuidanceService: ObservableObject {
         }
     }
 
-    func speak(_ text: String) {
-        guard isEnabled, text != lastSpokenStep else { return }
+    func speak(_ text: String, allowRepeat: Bool = false) {
+        guard isEnabled, allowRepeat || text != lastSpokenStep else { return }
         lastSpokenStep = text
 
         synthesizer.stopSpeaking(at: .immediate)
@@ -81,7 +81,7 @@ final class VoiceGuidanceService: ObservableObject {
     }
 
     func speakSpeedWarning() {
-        speak("Speed limit exceeded")
+        speak("Speed limit exceeded", allowRepeat: true)
     }
 
     func speakRadarAlert(distance: String) {
