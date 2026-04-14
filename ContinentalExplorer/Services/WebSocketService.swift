@@ -159,6 +159,7 @@ final class WebSocketService: ObservableObject {
     private var serverURL: String?
     private var pendingMessages: [WebSocketMessage] = []
     private let maxPendingMessages = 50
+    private var connectionGeneration: Int = 0
 
     private let jsonEncoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -194,8 +195,11 @@ final class WebSocketService: ObservableObject {
         webSocketTask?.maximumMessageSize = 1024 * 1024
         webSocketTask?.resume()
 
+        connectionGeneration += 1
+        let currentGeneration = connectionGeneration
+
         // Start listening for messages immediately
-        receiveMessage()
+        receiveMessage(generation: currentGeneration)
 
         // Verify connection with a ping before transitioning to .connected
         webSocketTask?.sendPing { [weak self] error in
@@ -290,15 +294,18 @@ final class WebSocketService: ObservableObject {
     }
 
     // MARK: - Receive
-    private func receiveMessage() {
+    private func receiveMessage(generation: Int) {
         webSocketTask?.receive { [weak self] result in
             Task { @MainActor in
+                guard let self = self else { return }
+                // Ignore callbacks from previous connection generations
+                guard generation == self.connectionGeneration else { return }
                 switch result {
                 case .success(let message):
-                    self?.handleMessage(message)
-                    self?.receiveMessage()
+                    self.handleMessage(message)
+                    self.receiveMessage(generation: generation)
                 case .failure(let error):
-                    self?.handleDisconnection(error: error)
+                    self.handleDisconnection(error: error)
                 }
             }
         }
@@ -447,9 +454,8 @@ final class WebSocketService: ObservableObject {
 
     // MARK: - Reconnection (Exponential Backoff with Jitter)
     private func handleDisconnection(error: Error) {
-        // Ignore errors from stale/cancelled tasks if we're already connecting or connected
+        // Only guard against duplicate reconnection attempts
         if case .connecting = connectionState { return }
-        if case .connected = connectionState { return }
 
         stopHeartbeat()
         connectionQuality = .none

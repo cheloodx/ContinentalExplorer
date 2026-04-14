@@ -26,12 +26,12 @@ struct TravelToken: Codable, Identifiable {
     }
 
     var formattedAmount: String {
-        let prefix = type == .earned ? "+" : "-"
+        let prefix = type == .spent ? "-" : "+"
         return "\(prefix)\(String(format: "%.1f", amount)) CT"
     }
 
     var isPositive: Bool {
-        type == .earned
+        type != .spent
     }
 }
 
