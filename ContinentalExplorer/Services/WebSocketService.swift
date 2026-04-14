@@ -460,8 +460,9 @@ final class WebSocketService: ObservableObject {
 
     // MARK: - Reconnection (Exponential Backoff with Jitter)
     private func handleDisconnection(error: Error) {
-        // Guard against duplicate reconnection scheduling
+        // Guard against duplicate reconnection scheduling or stale callbacks after explicit disconnect
         if case .reconnecting = connectionState { return }
+        if case .disconnected = connectionState { return }
 
         stopHeartbeat()
         connectionQuality = .none

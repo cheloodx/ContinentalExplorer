@@ -160,7 +160,7 @@ final class RouteService: ObservableObject {
         }
 
         let currentStep = steps[currentStepIndex]
-        let stepEndPoint = currentStep.polyline.coordinate
+        let stepEndPoint = currentStep.polyline.points()[currentStep.polyline.pointCount - 1].coordinate
         let distToEnd = currentLocation.distance(
             from: CLLocation(latitude: stepEndPoint.latitude, longitude: stepEndPoint.longitude)
         )
