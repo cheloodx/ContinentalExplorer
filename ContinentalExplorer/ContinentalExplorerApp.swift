@@ -10,6 +10,9 @@ struct ContinentalExplorerApp: App {
     @StateObject private var soundManager = AlertSoundManager()
     @StateObject private var navigationVM: NavigationViewModel
     @StateObject private var alertVM: AlertViewModel
+    @StateObject private var gamificationService: GamificationService
+    @StateObject private var auraAIService: AuraAIService
+    @StateObject private var travelTokenService: TravelTokenService
 
     let persistenceController = PersistenceController.shared
 
@@ -34,6 +37,9 @@ struct ContinentalExplorerApp: App {
             soundManager: sndManager
         ))
         _alertVM = StateObject(wrappedValue: AlertViewModel(alertService: altService))
+        _gamificationService = StateObject(wrappedValue: GamificationService())
+        _auraAIService = StateObject(wrappedValue: AuraAIService())
+        _travelTokenService = StateObject(wrappedValue: TravelTokenService())
     }
 
     var body: some Scene {
@@ -46,6 +52,9 @@ struct ContinentalExplorerApp: App {
                 .environmentObject(soundManager)
                 .environmentObject(navigationVM)
                 .environmentObject(alertVM)
+                .environmentObject(gamificationService)
+                .environmentObject(auraAIService)
+                .environmentObject(travelTokenService)
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
                 .preferredColorScheme(.dark)
                 .onAppear {

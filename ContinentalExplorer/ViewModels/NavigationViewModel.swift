@@ -214,6 +214,7 @@ final class NavigationViewModel: ObservableObject {
         isFollowingUser = true
         locationService.startTracking()
         voiceService.speak("Starting navigation")
+        setupLocationSharing()
     }
 
     func stopNavigation() {
@@ -246,6 +247,8 @@ final class NavigationViewModel: ObservableObject {
 
     // MARK: - Location Sharing
     private func setupLocationSharing() {
+        locationShareTimer?.invalidate()
+        locationShareTimer = nil
         guard let ws = webSocketService else { return }
         locationShareTimer = Timer.scheduledTimer(withTimeInterval: locationShareInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in

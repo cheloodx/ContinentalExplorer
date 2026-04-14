@@ -40,6 +40,8 @@ targets:
         NSLocationWhenInUseUsageDescription: "Continental Explorer needs your location for navigation and speed alerts."
         NSLocationAlwaysAndWhenInUseUsageDescription: "Continental Explorer needs continuous location access for background navigation and radar alerts."
         NSCameraUsageDescription: "Continental Explorer uses the camera for AR navigation overlay."
+        UIBackgroundModes:
+          - location
 
   ContinentalExplorerTests:
     type: bundle.unit-test

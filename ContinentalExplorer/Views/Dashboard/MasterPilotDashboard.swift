@@ -11,6 +11,9 @@ struct MasterPilotDashboard: View {
 
     @EnvironmentObject private var navigationVM: NavigationViewModel
     @EnvironmentObject private var alertVM: AlertViewModel
+    @EnvironmentObject private var gamificationService: GamificationService
+    @EnvironmentObject private var auraAIService: AuraAIService
+    @EnvironmentObject private var travelTokenService: TravelTokenService
     @StateObject private var searchService = PlacesSearchService()
     @StateObject private var mapStyleManager = MapStyleManager()
 
@@ -21,6 +24,10 @@ struct MasterPilotDashboard: View {
     @State private var showMapStylePicker = false
     @State private var showConnectionStatus = false
     @State private var showOfflineMaps = false
+    @State private var showProfile = false
+    @State private var showAuraAI = false
+    @State private var showRoadXP = false
+    @State private var showTokenWallet = false
 
     var body: some View {
         ZStack {
@@ -79,6 +86,26 @@ struct MasterPilotDashboard: View {
         }
         .sheet(isPresented: $showOfflineMaps) {
             OfflineMapManagerView()
+                .environmentObject(themeManager)
+        }
+        .sheet(isPresented: $showProfile) {
+            UserProfileView(
+                gamificationService: gamificationService,
+                tokenService: travelTokenService,
+                auraService: auraAIService
+            )
+            .environmentObject(themeManager)
+        }
+        .sheet(isPresented: $showAuraAI) {
+            AuraAIView(auraService: auraAIService)
+                .environmentObject(themeManager)
+        }
+        .sheet(isPresented: $showRoadXP) {
+            RoadXPDashboardView(gamificationService: gamificationService)
+                .environmentObject(themeManager)
+        }
+        .sheet(isPresented: $showTokenWallet) {
+            TravelTokenView(tokenService: travelTokenService)
                 .environmentObject(themeManager)
         }
         .onAppear {
@@ -189,10 +216,21 @@ struct MasterPilotDashboard: View {
 
                 Spacer()
 
-                // Connection indicator
-                Circle()
-                    .fill(connectionColor)
-                    .frame(width: 8, height: 8)
+                    // XP Level Badge
+                    if gamificationService.userProfile.level > 0 {
+                        Text("Lv.\(gamificationService.userProfile.level)")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(DesignTokens.Colors.primaryAccent)
+                            .clipShape(Capsule())
+                    }
+
+                    // Connection indicator
+                    Circle()
+                        .fill(connectionColor)
+                        .frame(width: 8, height: 8)
             }
             .padding(.horizontal, DesignTokens.Spacing.md)
             .padding(.vertical, DesignTokens.Spacing.sm + 4)
@@ -266,14 +304,19 @@ struct MasterPilotDashboard: View {
                 showLiveFeed = true
             }
 
-            // Offline maps
-            BottomBarButton(icon: "arrow.down.circle.fill", label: "Offline") {
-                showOfflineMaps = true
+            // Road XP
+            BottomBarButton(icon: "star.fill", label: "XP") {
+                showRoadXP = true
             }
 
-            // Settings
-            BottomBarButton(icon: "gearshape.fill", label: "More") {
-                showSettings = true
+            // Aura AI
+            BottomBarButton(icon: "brain.head.profile", label: "Aura") {
+                showAuraAI = true
+            }
+
+            // Profile / More
+            BottomBarButton(icon: "person.circle.fill", label: "Profile") {
+                showProfile = true
             }
         }
         .padding(.horizontal, DesignTokens.Spacing.lg)
@@ -369,6 +412,18 @@ struct MasterPilotDashboard: View {
                 Text(navigationVM.destination?.name ?? "")
                     .font(Typography.body(.md))
                     .foregroundStyle(DesignTokens.Colors.textSecondary)
+
+                // XP earned notification
+                HStack(spacing: DesignTokens.Spacing.sm) {
+                    Image(systemName: "star.fill")
+                        .foregroundStyle(DesignTokens.Colors.secondaryAccent)
+                    Text("+50 XP")
+                        .font(Typography.bodyMedium(.md))
+                        .foregroundStyle(DesignTokens.Colors.secondaryAccent)
+                    Text("Trip Completed")
+                        .font(Typography.body(.sm))
+                        .foregroundStyle(DesignTokens.Colors.textTertiary)
+                }
 
                 Button {
                     navigationVM.stopNavigation()
@@ -497,4 +552,7 @@ struct DestinationPinView: View {
         .environmentObject(AlertSoundManager())
         .environmentObject(NavigationViewModel(locationService: locService, alertService: altService))
         .environmentObject(AlertViewModel(alertService: altService))
+        .environmentObject(GamificationService())
+        .environmentObject(AuraAIService())
+        .environmentObject(TravelTokenService())
 }

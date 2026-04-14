@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var themeManager: ThemeManager
     @EnvironmentObject private var soundManager: AlertSoundManager
+    @EnvironmentObject private var webSocketService: WebSocketService
     @Environment(\.dismiss) private var dismiss
 
     @State private var speedAlerts: Bool = true

@@ -447,6 +447,10 @@ final class WebSocketService: ObservableObject {
 
     // MARK: - Reconnection (Exponential Backoff with Jitter)
     private func handleDisconnection(error: Error) {
+        // Ignore errors from stale/cancelled tasks if we're already connecting or connected
+        if case .connecting = connectionState { return }
+        if case .connected = connectionState { return }
+
         stopHeartbeat()
         connectionQuality = .none
 
