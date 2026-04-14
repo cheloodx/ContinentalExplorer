@@ -133,6 +133,7 @@ struct SettingsView: View {
             .sheet(isPresented: $showConnectionStatus) {
                 ConnectionStatusView()
                     .environmentObject(themeManager)
+                    .environmentObject(webSocketService)
             }
         }
     }

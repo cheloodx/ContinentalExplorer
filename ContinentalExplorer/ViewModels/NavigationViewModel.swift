@@ -157,6 +157,7 @@ final class NavigationViewModel: ObservableObject {
             .sink { [weak self] stepIndex, distance in
                 guard let self = self,
                       self.navigationMode == .navigating,
+                      distance > 30,
                       let step = self.routeService.currentStep else { return }
                 let distStr = distance < 1000 ? "\(Int(distance)) meters" : String(format: "%.1f kilometers", distance / 1000)
                 // Announce once at <500m (early warning) and once at <200m (imminent turn)
