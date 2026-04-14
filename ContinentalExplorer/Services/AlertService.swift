@@ -57,6 +57,7 @@ final class AlertService: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private let proximityThreshold: CLLocationDistance = 5000
     private var dismissTimer: Timer?
+    private var dismissWorkItem: DispatchWorkItem?
     private let maxFeedItems = 100
 
     init() {
@@ -256,6 +257,10 @@ final class AlertService: ObservableObject {
 
     // MARK: - Banner
     func showBannerAlert(_ alert: ActiveAlert) {
+        // Cancel any pending nil-out from a previous dismiss
+        dismissWorkItem?.cancel()
+        dismissWorkItem = nil
+
         currentBannerAlert = alert
         withAnimation(DesignTokens.Animation.spring) {
             isAlertBannerVisible = true
@@ -273,9 +278,13 @@ final class AlertService: ObservableObject {
         withAnimation(DesignTokens.Animation.spring) {
             isAlertBannerVisible = false
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        dismissWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self, !self.isAlertBannerVisible else { return }
             self.currentBannerAlert = nil
         }
+        dismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: workItem)
     }
 
     // MARK: - Community Reports

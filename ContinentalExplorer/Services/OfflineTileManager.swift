@@ -118,6 +118,7 @@ final class OfflineTileManager: ObservableObject {
             sizeInMB: Double(totalTiles) * 0.015
         )
         
+        downloadedRegions.removeAll { $0.id == downloadedRegion.id }
         downloadedRegions.append(downloadedRegion)
         downloadProgress[region.id]?.isComplete = true
         activeTasks.removeValue(forKey: region.id)
