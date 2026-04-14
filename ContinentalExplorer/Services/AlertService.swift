@@ -55,6 +55,7 @@ final class AlertService: ObservableObject {
 
     // MARK: - Private
     private var cancellables = Set<AnyCancellable>()
+    private var webSocketCancellables = Set<AnyCancellable>()
     private let proximityThreshold: CLLocationDistance = 5000
     private var dismissTimer: Timer?
     private var dismissWorkItem: DispatchWorkItem?
@@ -67,13 +68,16 @@ final class AlertService: ObservableObject {
 
     // MARK: - WebSocket Integration
     func bindToWebSocket(_ webSocketService: WebSocketService) {
+        // Clear previous WebSocket subscriptions to prevent duplicates
+        webSocketCancellables.removeAll()
+
         // Receive real-time community alerts
         webSocketService.alertSubject
             .receive(on: DispatchQueue.main)
             .sink { [weak self] report in
                 self?.handleIncomingCommunityReport(report)
             }
-            .store(in: &cancellables)
+            .store(in: &webSocketCancellables)
 
         // Receive real-time radar updates
         webSocketService.radarUpdateSubject
@@ -81,7 +85,7 @@ final class AlertService: ObservableObject {
             .sink { [weak self] radar in
                 self?.handleIncomingRadarUpdate(radar)
             }
-            .store(in: &cancellables)
+            .store(in: &webSocketCancellables)
 
         // Handle expired alerts
         webSocketService.alertExpiredSubject
@@ -89,7 +93,7 @@ final class AlertService: ObservableObject {
             .sink { [weak self] alertID in
                 self?.handleAlertExpired(alertID)
             }
-            .store(in: &cancellables)
+            .store(in: &webSocketCancellables)
 
         // Handle vote updates from other users
         webSocketService.voteUpdateSubject
@@ -97,7 +101,7 @@ final class AlertService: ObservableObject {
             .sink { [weak self] update in
                 self?.handleVoteUpdate(update)
             }
-            .store(in: &cancellables)
+            .store(in: &webSocketCancellables)
 
         // Track nearby users count
         webSocketService.$nearbyUsersCount
@@ -105,7 +109,7 @@ final class AlertService: ObservableObject {
             .sink { [weak self] _ in
                 // Could update UI based on nearby users
             }
-            .store(in: &cancellables)
+            .store(in: &webSocketCancellables)
     }
 
     // MARK: - Incoming Real-time Data
@@ -250,7 +254,8 @@ final class AlertService: ObservableObject {
         }
         .sorted { ($0.distance ?? .infinity) < ($1.distance ?? .infinity) }
 
-        if let closest = activeAlerts.first, closest.distance ?? .infinity < 1000 {
+        if let closest = activeAlerts.first, closest.distance ?? .infinity < 1000,
+           currentBannerAlert?.id != closest.id {
             showBannerAlert(closest)
         }
     }

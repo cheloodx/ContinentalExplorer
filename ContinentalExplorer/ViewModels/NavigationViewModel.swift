@@ -44,6 +44,8 @@ final class NavigationViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var locationShareTimer: Timer?
     private let locationShareInterval: TimeInterval = 10.0
+    private var earlyWarningAnnounced: Bool = false
+    private var imminentTurnAnnounced: Bool = false
 
     init(
         locationService: LocationService,
@@ -140,6 +142,15 @@ final class NavigationViewModel: ObservableObject {
         }
         .assign(to: &$mapAnnotations)
 
+        // Reset voice announcement flags when step changes
+        routeService.$currentStepIndex
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                self?.earlyWarningAnnounced = false
+                self?.imminentTurnAnnounced = false
+            }
+            .store(in: &cancellables)
+
         // Navigation step voice guidance
         routeService.$currentStepIndex
             .combineLatest(routeService.$distanceToNextStep)
@@ -148,10 +159,15 @@ final class NavigationViewModel: ObservableObject {
                       self.navigationMode == .navigating,
                       let step = self.routeService.currentStep else { return }
                 let distStr = distance < 1000 ? "\(Int(distance)) meters" : String(format: "%.1f kilometers", distance / 1000)
-                // Announce at ~500m (early warning) and ~200m (imminent turn)
-                let isEarlyWarning = distance < 500 && distance > 450
-                let isImminentTurn = distance < 200 && distance > 150
-                if isEarlyWarning || isImminentTurn {
+                // Announce once at <500m (early warning) and once at <200m (imminent turn)
+                if distance < 500 && !self.earlyWarningAnnounced {
+                    self.earlyWarningAnnounced = true
+                    self.voiceService.speakNavigationStep(
+                        instruction: step.instruction,
+                        distance: distStr
+                    )
+                } else if distance < 200 && !self.imminentTurnAnnounced {
+                    self.imminentTurnAnnounced = true
                     self.voiceService.speakNavigationStep(
                         instruction: step.instruction,
                         distance: distStr

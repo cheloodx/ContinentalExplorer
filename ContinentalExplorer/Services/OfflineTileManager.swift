@@ -63,6 +63,16 @@ final class OfflineTileManager: ObservableObject {
     func deleteRegion(regionID: UUID) {
         downloadedRegions.removeAll { $0.id == regionID }
         deleteTiles(for: regionID)
+        // Also delete the region entity from CoreData
+        let context = persistenceController.container.viewContext
+        let request: NSFetchRequest<OfflineRegionEntity> = OfflineRegionEntity.fetchRequest()
+        request.predicate = NSPredicate(format: "id == %@", regionID as CVarArg)
+        if let entities = try? context.fetch(request) {
+            for entity in entities {
+                context.delete(entity)
+            }
+            try? context.save()
+        }
         recalculateStorage()
     }
     
