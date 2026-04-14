@@ -66,12 +66,15 @@ final class TravelTokenService: ObservableObject {
         )
 
         transactions.insert(transaction, at: 0)
+        if transactions.count > maxTransactionHistory {
+            transactions = Array(transactions.prefix(maxTransactionHistory))
+        }
         balance += amount
     }
 
     // MARK: - Statistics
     var totalEarned: Double {
-        transactions.filter { $0.type == .earned || $0.type == .bonus }.reduce(0) { $0 + $1.amount }
+        transactions.filter { $0.type == .earned || $0.type == .bonus || $0.type == .referral }.reduce(0) { $0 + $1.amount }
     }
 
     var totalSpent: Double {
