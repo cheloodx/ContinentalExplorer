@@ -149,7 +149,10 @@ final class NavigationViewModel: ObservableObject {
                       self.navigationMode == .navigating,
                       let step = self.routeService.currentStep else { return }
                 let distStr = distance < 1000 ? "\(Int(distance)) meters" : String(format: "%.1f kilometers", distance / 1000)
-                if distance < 200 || distance < 500 {
+                // Announce at ~500m (early warning) and ~200m (imminent turn)
+                let isEarlyWarning = distance < 500 && distance > 450
+                let isImminentTurn = distance < 200 && distance > 150
+                if isEarlyWarning || isImminentTurn {
                     self.voiceService.speakNavigationStep(
                         instruction: step.instruction,
                         distance: distStr

@@ -9,8 +9,8 @@ struct MasterPilotDashboard: View {
     @EnvironmentObject private var webSocketService: WebSocketService
     @EnvironmentObject private var soundManager: AlertSoundManager
 
-    @StateObject private var navigationVM: NavigationViewModel
-    @StateObject private var alertVM: AlertViewModel
+    @EnvironmentObject private var navigationVM: NavigationViewModel
+    @EnvironmentObject private var alertVM: AlertViewModel
     @StateObject private var searchService = PlacesSearchService()
     @StateObject private var mapStyleManager = MapStyleManager()
 
@@ -21,20 +21,6 @@ struct MasterPilotDashboard: View {
     @State private var showMapStylePicker = false
     @State private var showConnectionStatus = false
     @State private var showOfflineMaps = false
-
-    init() {
-        let locService = LocationService()
-        let altService = AlertService()
-        let routeService = RouteService()
-        let voiceService = VoiceGuidanceService()
-        _navigationVM = StateObject(wrappedValue: NavigationViewModel(
-            locationService: locService,
-            alertService: altService,
-            routeService: routeService,
-            voiceService: voiceService
-        ))
-        _alertVM = StateObject(wrappedValue: AlertViewModel(alertService: altService))
-    }
 
     var body: some View {
         ZStack {
@@ -97,7 +83,6 @@ struct MasterPilotDashboard: View {
         }
         .onAppear {
             locationService.requestAuthorization()
-            alertService.bindToWebSocket(webSocketService)
         }
     }
 
@@ -502,10 +487,14 @@ struct DestinationPinView: View {
 
 // MARK: - Preview
 #Preview {
+    let locService = LocationService()
+    let altService = AlertService()
     MasterPilotDashboard()
         .environmentObject(ThemeManager())
-        .environmentObject(LocationService())
-        .environmentObject(AlertService())
+        .environmentObject(locService)
+        .environmentObject(altService)
         .environmentObject(WebSocketService())
         .environmentObject(AlertSoundManager())
+        .environmentObject(NavigationViewModel(locationService: locService, alertService: altService))
+        .environmentObject(AlertViewModel(alertService: altService))
 }

@@ -194,13 +194,24 @@ final class WebSocketService: ObservableObject {
         webSocketTask?.maximumMessageSize = 1024 * 1024
         webSocketTask?.resume()
 
-        updateConnectionState(.connected)
-        reconnectAttempts = 0
-        connectionQuality = .good
-
-        startHeartbeat()
+        // Start listening for messages immediately
         receiveMessage()
-        flushPendingMessages()
+
+        // Verify connection with a ping before transitioning to .connected
+        webSocketTask?.sendPing { [weak self] error in
+            Task { @MainActor in
+                guard let self = self else { return }
+                if let error = error {
+                    self.handleDisconnection(error: error)
+                } else {
+                    self.updateConnectionState(.connected)
+                    self.reconnectAttempts = 0
+                    self.connectionQuality = .good
+                    self.startHeartbeat()
+                    self.flushPendingMessages()
+                }
+            }
+        }
     }
 
     func disconnect(clearURL: Bool = true) {
