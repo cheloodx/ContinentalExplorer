@@ -132,7 +132,15 @@ final class OfflineTileManager: ObservableObject {
         downloadedRegions.append(downloadedRegion)
 
         // Persist the region entity to CoreData so it survives app restart
+        // Delete any existing entity with the same ID first to prevent duplicates on re-download
         let context = persistenceController.container.viewContext
+        let existingRequest: NSFetchRequest<OfflineRegionEntity> = OfflineRegionEntity.fetchRequest()
+        existingRequest.predicate = NSPredicate(format: "id == %@", downloadedRegion.id as CVarArg)
+        if let existing = try? context.fetch(existingRequest) {
+            for entity in existing {
+                context.delete(entity)
+            }
+        }
         let regionEntity = OfflineRegionEntity(context: context)
         regionEntity.id = downloadedRegion.id
         regionEntity.name = downloadedRegion.name

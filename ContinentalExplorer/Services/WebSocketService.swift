@@ -160,6 +160,7 @@ final class WebSocketService: ObservableObject {
     private var pendingMessages: [WebSocketMessage] = []
     private let maxPendingMessages = 50
     private var connectionGeneration: Int = 0
+    private var reconnectWorkItem: DispatchWorkItem?
 
     private let jsonEncoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -182,6 +183,8 @@ final class WebSocketService: ObservableObject {
             return
         }
 
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
         disconnect(clearURL: false)
         updateConnectionState(.connecting)
 
@@ -220,6 +223,8 @@ final class WebSocketService: ObservableObject {
     }
 
     func disconnect(clearURL: Bool = true) {
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
         stopHeartbeat()
         webSocketTask?.cancel(with: .goingAway, reason: "User disconnected".data(using: .utf8))
         webSocketTask = nil
@@ -478,12 +483,14 @@ final class WebSocketService: ObservableObject {
         let jitter = Double.random(in: 0...delay * 0.3)
         let totalDelay = delay + jitter
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + totalDelay) { [weak self] in
+        let workItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             Task { @MainActor in
                 self.connect(to: url)
             }
         }
+        reconnectWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + totalDelay, execute: workItem)
     }
 
     func manualReconnect() {

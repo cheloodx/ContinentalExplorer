@@ -36,7 +36,7 @@ struct ContinentalExplorerApp: App {
             webSocketService: wsService,
             soundManager: sndManager
         ))
-        _alertVM = StateObject(wrappedValue: AlertViewModel(alertService: altService))
+        _alertVM = StateObject(wrappedValue: AlertViewModel(alertService: altService, soundManager: sndManager, webSocketService: wsService))
         _gamificationService = StateObject(wrappedValue: GamificationService())
         _auraAIService = StateObject(wrappedValue: AuraAIService())
         _travelTokenService = StateObject(wrappedValue: TravelTokenService())
