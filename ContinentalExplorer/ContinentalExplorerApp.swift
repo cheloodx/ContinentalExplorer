@@ -28,12 +28,8 @@ struct ContinentalExplorerApp: App {
     }
 
     private func setupWebSocketConnection() {
-        // Connect to WebSocket server
-        // In production, this URL would come from a config or environment variable
         let wsURL = "wss://continental-explorer-api.example.com/ws"
         webSocketService.connect(to: wsURL)
-
-        // Bind WebSocket streams to alert service
         alertService.bindToWebSocket(webSocketService)
     }
 }

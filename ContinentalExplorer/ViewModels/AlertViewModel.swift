@@ -2,168 +2,116 @@ import SwiftUI
 import Combine
 import CoreLocation
 
+// MARK: - Report Submission Status
+enum ReportSubmissionStatus: Equatable {
+    case idle
+    case submitting
+    case success
+    case failed(String)
+}
+
 // MARK: - Alert View Model
 @MainActor
 final class AlertViewModel: ObservableObject {
-
-    // MARK: - Published
-    @Published var activeAlerts: [ActiveAlert] = []
-    @Published var bannerAlert: ActiveAlert?
-    @Published var isBannerVisible: Bool = false
-    @Published var selectedCategory: ReportCategory?
-    @Published var isReportSheetPresented: Bool = false
     @Published var communityReports: [CommunityReport] = []
+    @Published var radarAlerts: [RadarAlert] = []
+    @Published var isBannerVisible: Bool = false
+    @Published var bannerAlert: CommunityReport?
+    @Published var alertCount: Int = 0
+    @Published var reportStatus: ReportSubmissionStatus = .idle
     @Published var alertFeed: [AlertFeedItem] = []
     @Published var unreadAlertCount: Int = 0
-    @Published var isSubmittingReport: Bool = false
-    @Published var reportSubmissionStatus: ReportSubmissionStatus = .idle
 
-    // MARK: - Report Submission Status
-    enum ReportSubmissionStatus: Equatable {
-        case idle
-        case submitting
-        case success
-        case failed(String)
-    }
-
-    // MARK: - Private
     private let alertService: AlertService
-    private var webSocketService: WebSocketService?
     private var soundManager: AlertSoundManager?
+    private var webSocketService: WebSocketService?
     private var cancellables = Set<AnyCancellable>()
 
-    init(alertService: AlertService, webSocketService: WebSocketService? = nil, soundManager: AlertSoundManager? = nil) {
+    init(
+        alertService: AlertService,
+        soundManager: AlertSoundManager? = nil,
+        webSocketService: WebSocketService? = nil
+    ) {
         self.alertService = alertService
-        self.webSocketService = webSocketService
         self.soundManager = soundManager
+        self.webSocketService = webSocketService
         setupBindings()
-        setupWebSocketBindings()
     }
 
-    // MARK: - Bindings
     private func setupBindings() {
-        alertService.$activeAlerts
-            .assign(to: &$activeAlerts)
-
-        alertService.$currentBannerAlert
-            .assign(to: &$bannerAlert)
-
-        alertService.$isAlertBannerVisible
-            .assign(to: &$isBannerVisible)
-
         alertService.$communityReports
             .assign(to: &$communityReports)
+
+        alertService.$radarAlerts
+            .assign(to: &$radarAlerts)
+
+        alertService.$communityReports
+            .map { $0.count }
+            .assign(to: &$alertCount)
 
         alertService.$alertFeed
             .assign(to: &$alertFeed)
 
-        alertService.$unreadAlertCount
+        alertService.$alertFeed
+            .map { feed in feed.filter { !$0.isRead }.count }
             .assign(to: &$unreadAlertCount)
     }
 
-    private func setupWebSocketBindings() {
-        guard let ws = webSocketService else { return }
+    func showBanner(for report: CommunityReport) {
+        bannerAlert = report
+        isBannerVisible = true
+        soundManager?.alertReceived(severity: report.category.severity)
 
-        // Play sound when new community alert arrives
-        ws.alertSubject
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] report in
-                self?.soundManager?.alertReceived(severity: report.category.severity)
-            }
-            .store(in: &cancellables)
-
-        // Play sound when new radar update arrives
-        ws.radarUpdateSubject
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] radar in
-                self?.soundManager?.radarDetected(type: radar.type)
-            }
-            .store(in: &cancellables)
-
-        // Handle report acknowledgement from server
-        ws.reportAckSubject
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.reportSubmissionStatus = .success
-                self?.soundManager?.reportSubmitted()
-                // Reset after delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    self?.reportSubmissionStatus = .idle
-                }
-            }
-            .store(in: &cancellables)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            self?.dismissBanner()
+        }
     }
 
-    // MARK: - Actions
     func dismissBanner() {
-        alertService.dismissBanner()
-    }
-
-    func presentReportSheet(category: ReportCategory? = nil) {
-        selectedCategory = category
-        isReportSheetPresented = true
+        isBannerVisible = false
+        bannerAlert = nil
     }
 
     func submitReport(
         category: ReportCategory,
         description: String,
         coordinate: CLLocationCoordinate2D
-    ) {
-        let report = CommunityReport(
-            category: category,
-            coordinate: coordinate,
-            description: description,
-            reporterID: UUID().uuidString
-        )
-
-        // Submit locally
-        alertService.submitReport(report)
-        isReportSheetPresented = false
-        reportSubmissionStatus = .submitting
-        isSubmittingReport = true
-
-        // Submit via WebSocket for real-time broadcast
+    ) async {
+        reportStatus = .submitting
         if let ws = webSocketService {
-            Task {
-                await ws.submitReport(report)
-                isSubmittingReport = false
-                // If no ack comes within 3 seconds, mark as success anyway (optimistic)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-                    if self?.reportSubmissionStatus == .submitting {
-                        self?.reportSubmissionStatus = .success
-                        self?.soundManager?.reportSubmitted()
-                    }
-                }
-            }
+            await ws.submitReport(
+                category: category.rawValue,
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude,
+                description: description
+            )
+            reportStatus = .success
+            soundManager?.reportSubmitted()
         } else {
-            isSubmittingReport = false
-            reportSubmissionStatus = .success
+            let report = CommunityReport(
+                category: category,
+                coordinate: coordinate,
+                description: description,
+                reporterID: "local-user"
+            )
+            alertService.addReport(report)
+            reportStatus = .success
             soundManager?.reportSubmitted()
         }
-    }
 
-    func upvote(_ reportID: UUID) {
-        alertService.upvoteReport(reportID)
-        soundManager?.triggerHaptic(.selection)
-
-        // Send via WebSocket
-        if let ws = webSocketService {
-            Task {
-                await ws.sendVote(reportID: reportID.uuidString, isUpvote: true)
-            }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.reportStatus = .idle
         }
     }
 
-    func downvote(_ reportID: UUID) {
-        alertService.downvoteReport(reportID)
-        soundManager?.triggerHaptic(.selection)
+    func upvote(_ report: CommunityReport) {
+        alertService.upvoteReport(report.id)
+        soundManager?.triggerHaptic(.light)
+    }
 
-        // Send via WebSocket
-        if let ws = webSocketService {
-            Task {
-                await ws.sendVote(reportID: reportID.uuidString, isUpvote: false)
-            }
-        }
+    func downvote(_ report: CommunityReport) {
+        alertService.downvoteReport(report.id)
+        soundManager?.triggerHaptic(.light)
     }
 
     func markFeedRead() {
@@ -173,21 +121,22 @@ final class AlertViewModel: ObservableObject {
     func clearFeed() {
         alertService.clearFeed()
     }
+}
 
-    // MARK: - Computed
-    var sortedAlerts: [ActiveAlert] {
-        activeAlerts.sorted { $0.severity > $1.severity }
-    }
+// MARK: - AlertFeedItem (if not already in AlertService)
+struct AlertFeedItem: Identifiable {
+    let id = UUID()
+    let title: String
+    let subtitle: String
+    let iconName: String
+    let severity: AlertSeverity
+    let timestamp: Date
+    var isRead: Bool = false
 
-    var alertCount: Int {
-        activeAlerts.count
-    }
-
-    var hasActiveAlerts: Bool {
-        !activeAlerts.isEmpty
-    }
-
-    var recentFeed: [AlertFeedItem] {
-        Array(alertFeed.prefix(20))
+    var timeAgo: String {
+        let interval = Date().timeIntervalSince(timestamp)
+        if interval < 60 { return "Just now" }
+        if interval < 3600 { return "\(Int(interval / 60))m ago" }
+        return "\(Int(interval / 3600))h ago"
     }
 }

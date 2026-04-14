@@ -3,49 +3,60 @@ import MapKit
 import Combine
 import CoreLocation
 
-// MARK: - Navigation State
-enum NavigationState {
-    case idle
-    case navigating
-    case rerouting
-    case arrived
-}
-
 // MARK: - Navigation View Model
 @MainActor
 final class NavigationViewModel: ObservableObject {
 
-    // MARK: - Published
-    @Published var navigationState: NavigationState = .idle
+    // MARK: - Navigation State
+    @Published var navigationMode: NavigationMode = .idle
+    @Published var destination: Destination?
+    @Published var transportMode: TransportMode = .car
     @Published var mapCameraPosition: MapCameraPosition = .automatic
+
+    // MARK: - Speed & Location
     @Published var currentSpeed: Int = 0
     @Published var currentSpeedLimit: Int = 0
     @Published var speedStatus: SpeedStatus = .safe
     @Published var heading: Double = 0
+    @Published var isFollowingUser: Bool = true
+    @Published var currentRoadName: String = ""
+
+    // MARK: - Route Info
     @Published var eta: String = "--:--"
     @Published var distanceRemaining: String = "--"
-    @Published var currentRoadName: String = "Unknown Road"
-    @Published var isFollowingUser: Bool = true
+    @Published var timeRemaining: String = "--"
+    @Published var arrivalTime: String = "--:--"
+
+    // MARK: - Map
     @Published var showTrafficOverlay: Bool = true
     @Published var mapAnnotations: [MapAnnotationItem] = []
+    @Published var routePolyline: MKRoute?
+
+    // MARK: - Services
+    let locationService: LocationService
+    let alertService: AlertService
+    let routeService: RouteService
+    let voiceService: VoiceGuidanceService
+    var webSocketService: WebSocketService?
+    var soundManager: AlertSoundManager?
 
     // MARK: - Private
     private var cancellables = Set<AnyCancellable>()
-    private let locationService: LocationService
-    private let alertService: AlertService
-    private var webSocketService: WebSocketService?
-    private var soundManager: AlertSoundManager?
     private var locationShareTimer: Timer?
     private let locationShareInterval: TimeInterval = 10.0
 
     init(
         locationService: LocationService,
         alertService: AlertService,
+        routeService: RouteService = RouteService(),
+        voiceService: VoiceGuidanceService = VoiceGuidanceService(),
         webSocketService: WebSocketService? = nil,
         soundManager: AlertSoundManager? = nil
     ) {
         self.locationService = locationService
         self.alertService = alertService
+        self.routeService = routeService
+        self.voiceService = voiceService
         self.webSocketService = webSocketService
         self.soundManager = soundManager
         setupBindings()
@@ -70,27 +81,46 @@ final class NavigationViewModel: ObservableObject {
         locationService.$currentLocation
             .compactMap { $0 }
             .sink { [weak self] location in
-                self?.updateMapPosition(location: location)
-                self?.alertService.updateNearbyAlerts(currentLocation: location)
+                self?.handleLocationUpdate(location)
             }
             .store(in: &cancellables)
 
-        // Monitor speed status changes for sound alerts
         $speedStatus
             .removeDuplicates()
             .sink { [weak self] status in
                 self?.soundManager?.speedAlert(status: status)
+                if status == .danger {
+                    self?.voiceService.speakSpeedWarning()
+                }
             }
             .store(in: &cancellables)
 
-        // Combine radar alerts and community reports for map annotations
+        // Route updates
+        routeService.$selectedRoute
+            .compactMap { $0 }
+            .sink { [weak self] route in
+                self?.routePolyline = route.route
+                self?.eta = route.arrivalTime
+                self?.distanceRemaining = route.formattedDistance
+                self?.timeRemaining = route.formattedETA
+                self?.arrivalTime = route.arrivalTime
+            }
+            .store(in: &cancellables)
+
+        routeService.$hasArrived
+            .filter { $0 }
+            .sink { [weak self] _ in
+                self?.handleArrival()
+            }
+            .store(in: &cancellables)
+
+        // Map annotations from alerts
         Publishers.CombineLatest(
             alertService.$radarAlerts,
             alertService.$communityReports
         )
         .map { radars, reports in
             var annotations: [MapAnnotationItem] = []
-
             annotations += radars.map { alert in
                 MapAnnotationItem(
                     id: alert.id,
@@ -99,7 +129,6 @@ final class NavigationViewModel: ObservableObject {
                     title: "\(alert.type.rawValue) - \(alert.speedLimit) km/h"
                 )
             }
-
             annotations += reports.filter { !$0.isExpired }.map { report in
                 MapAnnotationItem(
                     id: report.id,
@@ -108,16 +137,113 @@ final class NavigationViewModel: ObservableObject {
                     title: report.category.rawValue
                 )
             }
-
             return annotations
         }
         .assign(to: &$mapAnnotations)
+
+        // Navigation step voice guidance
+        routeService.$currentStepIndex
+            .combineLatest(routeService.$distanceToNextStep)
+            .sink { [weak self] stepIndex, distance in
+                guard let self = self,
+                      self.navigationMode == .navigating,
+                      let step = self.routeService.currentStep else { return }
+                let distStr = distance < 1000 ? "\(Int(distance)) meters" : String(format: "%.1f kilometers", distance / 1000)
+                if distance < 200 || distance < 500 {
+                    self.voiceService.speakNavigationStep(
+                        instruction: step.instruction,
+                        distance: distStr
+                    )
+                }
+            }
+            .store(in: &cancellables)
     }
 
-    // MARK: - Location Sharing via WebSocket
+    // MARK: - Location Updates
+    private func handleLocationUpdate(_ location: CLLocation) {
+        alertService.updateNearbyAlerts(currentLocation: location)
+
+        if isFollowingUser {
+            let pitch: Double = navigationMode == .navigating ? 60 : 45
+            let distance: Double = navigationMode == .navigating ? 600 : 1000
+            mapCameraPosition = .camera(
+                MapCamera(
+                    centerCoordinate: location.coordinate,
+                    distance: distance,
+                    heading: heading,
+                    pitch: pitch
+                )
+            )
+        }
+
+        if navigationMode == .navigating {
+            routeService.updateNavigation(currentLocation: location)
+            // Update remaining distance/time
+            if let route = routeService.selectedRoute {
+                let stepsLeft = route.steps.suffix(from: routeService.currentStepIndex)
+                let remainDist = stepsLeft.reduce(0.0) { $0 + $1.distance }
+                distanceRemaining = remainDist < 1000 ?
+                    "\(Int(remainDist)) m" :
+                    String(format: "%.1f km", remainDist / 1000)
+            }
+        }
+    }
+
+    // MARK: - Navigation Control
+    func setDestination(_ dest: Destination) {
+        destination = dest
+        navigationMode = .previewing
+    }
+
+    func startRouteCalculation() async {
+        guard let dest = destination,
+              let currentLoc = locationService.currentLocation else { return }
+        await routeService.calculateRoute(
+            from: currentLoc.coordinate,
+            to: dest.coordinate,
+            transportType: transportMode.mkTransportType
+        )
+    }
+
+    func startNavigation() {
+        guard routeService.selectedRoute != nil else { return }
+        navigationMode = .navigating
+        isFollowingUser = true
+        locationService.startTracking()
+        voiceService.speak("Starting navigation")
+    }
+
+    func stopNavigation() {
+        navigationMode = .idle
+        destination = nil
+        routeService.clearRoute()
+        routePolyline = nil
+        voiceService.speak("Navigation ended")
+        locationShareTimer?.invalidate()
+        locationShareTimer = nil
+    }
+
+    func recenterMap() {
+        isFollowingUser = true
+        if let location = locationService.currentLocation {
+            handleLocationUpdate(location)
+        }
+    }
+
+    func toggleTraffic() {
+        showTrafficOverlay.toggle()
+    }
+
+    // MARK: - Arrival
+    private func handleArrival() {
+        navigationMode = .arrived
+        voiceService.speakArrival()
+        soundManager?.triggerHaptic(.success)
+    }
+
+    // MARK: - Location Sharing
     private func setupLocationSharing() {
         guard let ws = webSocketService else { return }
-
         locationShareTimer = Timer.scheduledTimer(withTimeInterval: locationShareInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self = self,
@@ -128,58 +254,5 @@ final class NavigationViewModel: ObservableObject {
                 )
             }
         }
-    }
-
-    // MARK: - Map Control
-    private func updateMapPosition(location: CLLocation) {
-        guard isFollowingUser else { return }
-        mapCameraPosition = .camera(
-            MapCamera(
-                centerCoordinate: location.coordinate,
-                distance: 1000,
-                heading: heading,
-                pitch: 45
-            )
-        )
-    }
-
-    func centerOnUser() {
-        isFollowingUser = true
-        if let location = locationService.currentLocation {
-            updateMapPosition(location: location)
-        }
-    }
-
-    func toggleTraffic() {
-        showTrafficOverlay.toggle()
-    }
-
-    // MARK: - Navigation
-    func startNavigation() {
-        navigationState = .navigating
-        locationService.requestAuthorization()
-        locationService.startTracking()
-    }
-
-    func stopNavigation() {
-        navigationState = .idle
-        locationService.stopTracking()
-        locationShareTimer?.invalidate()
-        locationShareTimer = nil
-    }
-}
-
-// MARK: - Map Annotation Item
-struct MapAnnotationItem: Identifiable {
-    let id: UUID
-    let coordinate: CLLocationCoordinate2D
-    let type: AnnotationType
-    let title: String
-
-    enum AnnotationType {
-        case radar(RadarType)
-        case communityReport(ReportCategory)
-        case userLocation
-        case destination
     }
 }

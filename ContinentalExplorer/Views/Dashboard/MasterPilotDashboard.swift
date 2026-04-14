@@ -1,9 +1,7 @@
 import SwiftUI
 import MapKit
 
-// MARK: - Master Pilot Dashboard
-/// Root view implementing the ZStack architecture with Map layer at bottom
-/// and custom HUD components using .ultraThinMaterial overlays
+// MARK: - Master Pilot Dashboard (Waze/Professional Style)
 struct MasterPilotDashboard: View {
     @EnvironmentObject private var themeManager: ThemeManager
     @EnvironmentObject private var locationService: LocationService
@@ -13,94 +11,92 @@ struct MasterPilotDashboard: View {
 
     @StateObject private var navigationVM: NavigationViewModel
     @StateObject private var alertVM: AlertViewModel
+    @StateObject private var searchService = PlacesSearchService()
+    @StateObject private var mapStyleManager = MapStyleManager()
 
+    @State private var showSearch = false
     @State private var showSettings = false
-    @State private var showOfflineMaps = false
-    @State private var showAlertList = false
-    @State private var showLiveFeed = false
     @State private var showReportSheet = false
+    @State private var showLiveFeed = false
+    @State private var showMapStylePicker = false
     @State private var showConnectionStatus = false
-    @State private var selectedTab: DashboardTab = .map
+    @State private var showOfflineMaps = false
 
     init() {
         let locService = LocationService()
         let altService = AlertService()
+        let routeService = RouteService()
+        let voiceService = VoiceGuidanceService()
         _navigationVM = StateObject(wrappedValue: NavigationViewModel(
             locationService: locService,
-            alertService: altService
+            alertService: altService,
+            routeService: routeService,
+            voiceService: voiceService
         ))
         _alertVM = StateObject(wrappedValue: AlertViewModel(alertService: altService))
     }
 
     var body: some View {
         ZStack {
-            // Layer 1: Background
-            themeManager.backgroundColor
+            // Layer 1: Map
+            mapLayer
                 .ignoresSafeArea()
 
-            // Layer 2: Map
-            mapLayer
+            // Layer 2: Overlays based on navigation mode
+            switch navigationVM.navigationMode {
+            case .idle:
+                idleModeOverlay
+            case .previewing:
+                previewModeOverlay
+            case .navigating, .rerouting:
+                navigationModeOverlay
+            case .arrived:
+                arrivedOverlay
+            }
 
-            // Layer 3: HUD Overlays
-            VStack(spacing: 0) {
-                // Top HUD Bar
-                topHUDBar
-
-                Spacer()
-
-                // Alert Banner (conditionally shown)
-                if alertVM.isBannerVisible, let alert = alertVM.bannerAlert {
+            // Alert Banner
+            if alertVM.isBannerVisible, let alert = alertVM.bannerAlert {
+                VStack {
                     AlertBannerView(alert: alert) {
                         alertVM.dismissBanner()
                     }
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .padding(.horizontal, DesignTokens.Spacing.md)
+                    .padding(.top, 100)
+                    Spacer()
                 }
-
-                Spacer()
-
-                // Bottom HUD
-                bottomHUDBar
             }
-
-            // Layer 4: Side Controls
-            sideControls
         }
         .animation(
             themeManager.isAnimationReduced ? .none : DesignTokens.Animation.spring,
-            value: alertVM.isBannerVisible
+            value: navigationVM.navigationMode == .idle
         )
         .sheet(isPresented: $showSettings) {
             SettingsView()
                 .environmentObject(themeManager)
                 .environmentObject(soundManager)
         }
-        .sheet(isPresented: $showOfflineMaps) {
-            OfflineMapManagerView()
+        .sheet(isPresented: $showReportSheet) {
+            ReportSubmissionSheet(viewModel: alertVM)
                 .environmentObject(themeManager)
-        }
-        .sheet(isPresented: $showAlertList) {
-            CommunityAlertView(viewModel: alertVM)
-                .environmentObject(themeManager)
+                .environmentObject(locationService)
         }
         .sheet(isPresented: $showLiveFeed) {
             LiveAlertFeedView(viewModel: alertVM)
                 .environmentObject(themeManager)
                 .environmentObject(webSocketService)
         }
-        .sheet(isPresented: $showReportSheet) {
-            ReportSubmissionSheet(viewModel: alertVM)
-                .environmentObject(themeManager)
-                .environmentObject(locationService)
-        }
         .sheet(isPresented: $showConnectionStatus) {
             ConnectionStatusView()
                 .environmentObject(themeManager)
                 .environmentObject(webSocketService)
         }
+        .sheet(isPresented: $showOfflineMaps) {
+            OfflineMapManagerView()
+                .environmentObject(themeManager)
+        }
         .onAppear {
             locationService.requestAuthorization()
-            // Bind real-time WebSocket streams to alert service
             alertService.bindToWebSocket(webSocketService)
         }
     }
@@ -108,64 +104,176 @@ struct MasterPilotDashboard: View {
     // MARK: - Map Layer
     private var mapLayer: some View {
         Map(position: $navigationVM.mapCameraPosition) {
-            // User location
             UserAnnotation()
 
-            // Radar & community annotations
+            // Route polyline
+            if let route = navigationVM.routePolyline {
+                MapPolyline(route.polyline)
+                    .stroke(DesignTokens.Colors.primaryAccent, lineWidth: 6)
+            }
+
+            // Annotations
             ForEach(navigationVM.mapAnnotations) { annotation in
                 Annotation(annotation.title, coordinate: annotation.coordinate) {
                     MapAnnotationView(annotation: annotation)
                 }
             }
+
+            // Destination pin
+            if let dest = navigationVM.destination {
+                Annotation(dest.name, coordinate: dest.coordinate) {
+                    DestinationPinView()
+                }
+            }
         }
-        .mapStyle(.standard(elevation: .realistic, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: navigationVM.showTrafficOverlay))
+        .mapStyle(mapStyleManager.mapStyle)
         .mapControls {
             MapCompass()
         }
-        .ignoresSafeArea()
     }
 
-    // MARK: - Top HUD
-    private var topHUDBar: some View {
-        HStack(spacing: DesignTokens.Spacing.md) {
-            // Speed HUD
-            SpeedHUDView(
-                speed: navigationVM.currentSpeed,
-                speedLimit: navigationVM.currentSpeedLimit,
-                status: navigationVM.speedStatus
-            )
+    // MARK: - IDLE Mode (Default - search bar + FABs)
+    private var idleModeOverlay: some View {
+        ZStack {
+            VStack(spacing: 0) {
+                if showSearch {
+                    SearchBarView(
+                        searchService: searchService,
+                        onSelectResult: { result in
+                            let dest = Destination(
+                                name: result.title,
+                                address: result.subtitle,
+                                coordinate: result.coordinate,
+                                mapItem: result.mapItem
+                            )
+                            navigationVM.setDestination(dest)
+                            showSearch = false
+                            Task { await navigationVM.startRouteCalculation() }
+                        },
+                        onDismiss: { showSearch = false }
+                    )
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                } else {
+                    // Waze-style top search bar
+                    wazeSearchBar
+                }
 
-            Spacer()
+                Spacer()
+            }
 
-            // Navigation info
-            NavigationHUDView(
-                roadName: navigationVM.currentRoadName,
-                eta: navigationVM.eta,
-                distance: navigationVM.distanceRemaining
-            )
+            // Speed indicator (bottom left)
+            VStack {
+                Spacer()
+                HStack {
+                    SpeedIndicatorView(
+                        speed: navigationVM.currentSpeed,
+                        speedLimit: navigationVM.currentSpeedLimit,
+                        status: navigationVM.speedStatus
+                    )
+                    .padding(.leading, DesignTokens.Spacing.md)
+                    Spacer()
+                }
+                .padding(.bottom, 100)
+            }
 
-            Spacer()
+            // Right side FABs
+            rightSideFABs
 
-            // Connection & users
-            VStack(spacing: DesignTokens.Spacing.xxs) {
-                connectionIndicator
-                NearbyUsersIndicator()
+            // Bottom bar
+            VStack {
+                Spacer()
+                bottomBar
             }
         }
+        .animation(DesignTokens.Animation.spring, value: showSearch)
+    }
+
+    // MARK: - Waze Search Bar
+    private var wazeSearchBar: some View {
+        Button {
+            showSearch = true
+        } label: {
+            HStack(spacing: DesignTokens.Spacing.sm) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 16))
+                    .foregroundStyle(DesignTokens.Colors.textTertiary)
+
+                Text("Where to?")
+                    .font(Typography.bodyMedium(.md))
+                    .foregroundStyle(DesignTokens.Colors.textTertiary)
+
+                Spacer()
+
+                // Connection indicator
+                Circle()
+                    .fill(connectionColor)
+                    .frame(width: 8, height: 8)
+            }
+            .padding(.horizontal, DesignTokens.Spacing.md)
+            .padding(.vertical, DesignTokens.Spacing.sm + 4)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.xl))
+            .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+        }
+        .buttonStyle(.plain)
         .padding(.horizontal, DesignTokens.Spacing.md)
         .padding(.top, DesignTokens.Spacing.sm)
     }
 
-    // MARK: - Bottom HUD
-    private var bottomHUDBar: some View {
-        HStack(spacing: DesignTokens.Spacing.lg) {
-            // Report button
-            HUDButton(icon: "exclamationmark.triangle.fill", label: "Report") {
+    // MARK: - Right Side FABs
+    private var rightSideFABs: some View {
+        VStack {
+            Spacer()
+
+            HStack {
+                Spacer()
+
+                VStack(spacing: DesignTokens.Spacing.sm) {
+                    // Map style
+                    FloatingActionButton(
+                        icon: mapStyleManager.currentStyle.iconName,
+                        size: 44
+                    ) {
+                        mapStyleManager.cycleStyle()
+                    }
+
+                    // Traffic toggle
+                    FloatingActionButton(
+                        icon: "car.2.fill",
+                        isActive: mapStyleManager.showTraffic,
+                        size: 44
+                    ) {
+                        mapStyleManager.showTraffic.toggle()
+                    }
+
+                    // Center on user
+                    FloatingActionButton(
+                        icon: "location.fill",
+                        isActive: navigationVM.isFollowingUser,
+                        tint: DesignTokens.Colors.primaryAccent,
+                        size: 48
+                    ) {
+                        navigationVM.recenterMap()
+                    }
+                }
+                .padding(.trailing, DesignTokens.Spacing.md)
+            }
+
+            Spacer()
+                .frame(height: 100)
+        }
+    }
+
+    // MARK: - Bottom Bar (Waze-style)
+    private var bottomBar: some View {
+        HStack(spacing: DesignTokens.Spacing.xl) {
+            // Report
+            BottomBarButton(icon: "exclamationmark.triangle.fill", label: "Report") {
                 showReportSheet = true
             }
 
-            // Live Feed
-            HUDButton(
+            // Live feed
+            BottomBarButton(
                 icon: "antenna.radiowaves.left.and.right",
                 label: "Live",
                 badge: alertVM.unreadAlertCount
@@ -173,26 +281,13 @@ struct MasterPilotDashboard: View {
                 showLiveFeed = true
             }
 
-            // Center on user
-            HUDButton(
-                icon: "location.fill",
-                label: "Center",
-                isActive: navigationVM.isFollowingUser
-            ) {
-                navigationVM.centerOnUser()
-            }
-
-            // Alerts list
-            HUDButton(
-                icon: "bell.fill",
-                label: "Alerts",
-                badge: alertVM.alertCount
-            ) {
-                showAlertList = true
+            // Offline maps
+            BottomBarButton(icon: "arrow.down.circle.fill", label: "Offline") {
+                showOfflineMaps = true
             }
 
             // Settings
-            HUDButton(icon: "gearshape.fill", label: "Settings") {
+            BottomBarButton(icon: "gearshape.fill", label: "More") {
                 showSettings = true
             }
         }
@@ -204,78 +299,113 @@ struct MasterPilotDashboard: View {
             RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.xl)
                 .stroke(DesignTokens.HUD.borderColor, lineWidth: DesignTokens.HUD.borderWidth)
         )
+        .shadow(color: .black.opacity(0.15), radius: 8, y: -2)
         .padding(.horizontal, DesignTokens.Spacing.md)
         .padding(.bottom, DesignTokens.Spacing.md)
     }
 
-    // MARK: - Side Controls
-    private var sideControls: some View {
-        VStack(spacing: DesignTokens.Spacing.sm) {
+    // MARK: - Preview Mode (Route selected, before starting)
+    private var previewModeOverlay: some View {
+        VStack {
             Spacer()
 
-            HStack {
-                Spacer()
-
-                VStack(spacing: DesignTokens.Spacing.sm) {
-                    // Traffic toggle
-                    SideControlButton(
-                        icon: "car.2.fill",
-                        isActive: navigationVM.showTrafficOverlay
-                    ) {
-                        navigationVM.toggleTraffic()
-                    }
-
-                    // Eco mode toggle
-                    SideControlButton(
-                        icon: themeManager.currentTheme.iconName,
-                        isActive: themeManager.isEcoModeEnabled,
-                        tint: .green
-                    ) {
-                        themeManager.toggleEcoMode()
-                    }
-
-                    // Offline maps
-                    SideControlButton(
-                        icon: "arrow.down.circle.fill",
-                        isActive: false
-                    ) {
-                        showOfflineMaps = true
-                    }
+            RoutePreviewSheet(
+                navigationVM: navigationVM,
+                routeService: navigationVM.routeService,
+                onStartNavigation: {
+                    navigationVM.startNavigation()
+                },
+                onDismiss: {
+                    navigationVM.stopNavigation()
                 }
-                .padding(.trailing, DesignTokens.Spacing.md)
+            )
+            .transition(.move(edge: .bottom))
+        }
+        .animation(DesignTokens.Animation.spring, value: navigationVM.navigationMode == .previewing)
+    }
+
+    // MARK: - Navigation Mode (Active turn-by-turn)
+    private var navigationModeOverlay: some View {
+        ZStack {
+            NavigationModeView(
+                navigationVM: navigationVM,
+                routeService: navigationVM.routeService,
+                voiceService: navigationVM.voiceService
+            )
+
+            // Speed indicator
+            VStack {
+                Spacer()
+                HStack {
+                    SpeedIndicatorView(
+                        speed: navigationVM.currentSpeed,
+                        speedLimit: navigationVM.currentSpeedLimit,
+                        status: navigationVM.speedStatus
+                    )
+                    .padding(.leading, DesignTokens.Spacing.md)
+                    Spacer()
+                }
+                .padding(.bottom, 120)
             }
 
-            Spacer()
-                .frame(height: 120)
+            // Report button during navigation
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    FloatingActionButton(
+                        icon: "exclamationmark.triangle.fill",
+                        tint: DesignTokens.Colors.warning,
+                        size: 48
+                    ) {
+                        showReportSheet = true
+                    }
+                    .padding(.trailing, DesignTokens.Spacing.md)
+                }
+                .padding(.bottom, 120)
+            }
         }
     }
 
-    // MARK: - Connection Indicator
-    private var connectionIndicator: some View {
-        Button {
-            showConnectionStatus = true
-        } label: {
-            HStack(spacing: DesignTokens.Spacing.xs) {
-                Circle()
-                    .fill(connectionColor)
-                    .frame(width: 8, height: 8)
+    // MARK: - Arrived Overlay
+    private var arrivedOverlay: some View {
+        VStack {
+            Spacer()
 
-                Text(webSocketService.connectionState.statusText.uppercased())
-                    .font(Typography.hudLabel(size: 10))
+            VStack(spacing: DesignTokens.Spacing.md) {
+                Image(systemName: "flag.checkered")
+                    .font(.system(size: 40))
+                    .foregroundStyle(DesignTokens.Colors.success)
+
+                Text("You have arrived!")
+                    .font(Typography.headline(.h3))
+                    .foregroundStyle(DesignTokens.Colors.textPrimary)
+
+                Text(navigationVM.destination?.name ?? "")
+                    .font(Typography.body(.md))
                     .foregroundStyle(DesignTokens.Colors.textSecondary)
 
-                if webSocketService.connectionState.isConnected {
-                    ConnectionQualityBars(quality: webSocketService.connectionQuality)
+                Button {
+                    navigationVM.stopNavigation()
+                } label: {
+                    Text("Done")
+                        .font(Typography.headline(.h5))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, DesignTokens.Spacing.md)
+                        .background(DesignTokens.Colors.primaryAccent)
+                        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md))
                 }
             }
-            .padding(.horizontal, DesignTokens.Spacing.sm)
-            .padding(.vertical, DesignTokens.Spacing.xs)
+            .padding(DesignTokens.Spacing.lg)
             .background(.ultraThinMaterial)
-            .clipShape(Capsule())
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.xl))
+            .padding(.horizontal, DesignTokens.Spacing.lg)
+            .padding(.bottom, DesignTokens.Spacing.xxl)
         }
-        .buttonStyle(.plain)
     }
 
+    // MARK: - Helpers
     private var connectionColor: Color {
         switch webSocketService.connectionState {
         case .connected: return DesignTokens.Colors.success
@@ -285,19 +415,39 @@ struct MasterPilotDashboard: View {
     }
 }
 
-// MARK: - Dashboard Tab
-enum DashboardTab: String, CaseIterable {
-    case map = "Map"
-    case alerts = "Alerts"
-    case offline = "Offline"
-    case settings = "Settings"
+// MARK: - Floating Action Button
+struct FloatingActionButton: View {
+    let icon: String
+    var isActive: Bool = false
+    var tint: Color = DesignTokens.Colors.textSecondary
+    var size: CGFloat = 44
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: size * 0.36, weight: .medium))
+                .foregroundStyle(isActive ? tint : DesignTokens.Colors.textSecondary)
+                .frame(width: size, height: size)
+                .background(.ultraThinMaterial)
+                .clipShape(Circle())
+                .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
+                .overlay(
+                    Circle()
+                        .stroke(
+                            isActive ? tint.opacity(0.4) : Color.clear,
+                            lineWidth: 1.5
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+    }
 }
 
-// MARK: - HUD Button
-struct HUDButton: View {
+// MARK: - Bottom Bar Button
+struct BottomBarButton: View {
     let icon: String
     let label: String
-    var isActive: Bool = false
     var badge: Int = 0
     let action: () -> Void
 
@@ -307,59 +457,50 @@ struct HUDButton: View {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: icon)
                         .font(.system(size: 20))
-                        .foregroundStyle(
-                            isActive ? DesignTokens.Colors.primaryAccent : DesignTokens.Colors.textSecondary
-                        )
+                        .foregroundStyle(DesignTokens.Colors.textSecondary)
 
                     if badge > 0 {
                         Text("\(badge)")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(.system(size: 9, weight: .bold))
                             .foregroundStyle(.white)
                             .padding(3)
                             .background(DesignTokens.Colors.danger)
                             .clipShape(Circle())
-                            .offset(x: 8, y: -8)
+                            .offset(x: 8, y: -6)
                     }
                 }
 
                 Text(label)
                     .font(Typography.body(.xxs))
-                    .foregroundStyle(
-                        isActive ? DesignTokens.Colors.primaryAccent : DesignTokens.Colors.textTertiary
-                    )
+                    .foregroundStyle(DesignTokens.Colors.textTertiary)
             }
         }
         .buttonStyle(.plain)
     }
 }
 
-// MARK: - Side Control Button
-struct SideControlButton: View {
-    let icon: String
-    var isActive: Bool = false
-    var tint: Color = DesignTokens.Colors.primaryAccent
-    let action: () -> Void
-
+// MARK: - Destination Pin
+struct DestinationPinView: View {
     var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(isActive ? tint : DesignTokens.Colors.textSecondary)
-                .frame(width: 44, height: 44)
-                .background(.ultraThinMaterial)
-                .clipShape(Circle())
-                .overlay(
+        VStack(spacing: 0) {
+            Image(systemName: "mappin.circle.fill")
+                .font(.system(size: 32))
+                .foregroundStyle(DesignTokens.Colors.danger)
+                .background(
                     Circle()
-                        .stroke(
-                            isActive ? tint.opacity(0.5) : Color.clear,
-                            lineWidth: 1.5
-                        )
+                        .fill(.white)
+                        .frame(width: 24, height: 24)
                 )
+
+            Image(systemName: "arrowtriangle.down.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(DesignTokens.Colors.danger)
+                .offset(y: -4)
         }
-        .buttonStyle(.plain)
     }
 }
 
+// MARK: - Preview
 #Preview {
     MasterPilotDashboard()
         .environmentObject(ThemeManager())
