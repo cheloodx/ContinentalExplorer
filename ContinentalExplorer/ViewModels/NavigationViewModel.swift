@@ -60,7 +60,6 @@ final class NavigationViewModel: ObservableObject {
         self.webSocketService = webSocketService
         self.soundManager = soundManager
         setupBindings()
-        setupLocationSharing()
     }
 
     // MARK: - Bindings
